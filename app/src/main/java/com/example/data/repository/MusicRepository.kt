@@ -27,15 +27,35 @@ class MusicRepository(
     val allPlaylists: Flow<List<PlaylistEntity>> = playlistDao.getAllPlaylists()
     val favorites: Flow<List<SongEntity>> = playbackDao.getFavorites()
     val recentlyPlayed: Flow<List<SongEntity>> = playbackDao.getRecentlyPlayedLimit(20)
+    val mostPlayedSongs: Flow<List<SongEntity>> = songDao.getTop10MostPlayedSongs()
     val folderPaths: Flow<List<String>> = songDao.getUniqueFolderPaths()
 
     fun isFavorite(songId: String): Flow<Boolean> = playbackDao.isFavorite(songId)
 
+    private suspend fun getOrCreateFavoritesPlaylistId(): Long {
+        val playlists = playlistDao.getAllPlaylists().first()
+        val existing = playlists.find { it.playlistName.equals("Favorites", ignoreCase = true) }
+        return if (existing != null) {
+            existing.playlistId
+        } else {
+            playlistDao.insertPlaylist(PlaylistEntity(playlistName = "Favorites"))
+        }
+    }
+
     suspend fun toggleFavorite(songId: String) = withContext(Dispatchers.IO) {
+        val favPlaylistId = getOrCreateFavoritesPlaylistId()
         if (playbackDao.isFavoriteOneShot(songId)) {
             playbackDao.deleteFavorite(songId)
+            playlistDao.deleteSongFromPlaylist(favPlaylistId, songId)
         } else {
             playbackDao.insertFavorite(FavoriteEntity(songId = songId))
+            val currentSongs = playlistDao.getSongsInPlaylist(favPlaylistId).first()
+            val position = currentSongs.size
+            if (currentSongs.none { it.id == songId }) {
+                playlistDao.insertPlaylistSong(
+                    PlaylistSongEntity(playlistId = favPlaylistId, songId = songId, position = position)
+                )
+            }
         }
     }
 
@@ -62,9 +82,30 @@ class MusicRepository(
         playlistDao.insertPlaylist(PlaylistEntity(playlistName = name))
     }
 
+    suspend fun renamePlaylist(playlistId: Long, newName: String) = withContext(Dispatchers.IO) {
+        playlistDao.renamePlaylist(playlistId, newName)
+    }
+
     suspend fun deletePlaylist(playlistId: Long) = withContext(Dispatchers.IO) {
         playlistDao.deletePlaylist(playlistId)
         playlistDao.clearPlaylistSongs(playlistId)
+    }
+
+    suspend fun reorderSongsInPlaylist(playlistId: Long, songIds: List<String>) = withContext(Dispatchers.IO) {
+        playlistDao.clearPlaylistSongs(playlistId)
+        val entities = songIds.mapIndexed { index, songId ->
+            PlaylistSongEntity(playlistId = playlistId, songId = songId, position = index)
+        }
+        playlistDao.insertPlaylistSongs(entities)
+    }
+
+    suspend fun reorderPlaylists(playlistIds: List<Long>) = withContext(Dispatchers.IO) {
+        playlistIds.forEachIndexed { index, id ->
+            val playlist = playlistDao.getPlaylistById(id)
+            if (playlist != null) {
+                playlistDao.insertPlaylist(playlist.copy(position = index))
+            }
+        }
     }
 
     fun getSongsInPlaylist(playlistId: Long): Flow<List<SongEntity>> =
@@ -72,6 +113,11 @@ class MusicRepository(
 
     suspend fun addToRecentlyPlayed(songId: String) = withContext(Dispatchers.IO) {
         playbackDao.insertRecentlyPlayed(RecentlyPlayedEntity(songId = songId, playedAt = System.currentTimeMillis()))
+        // Automatically increment play count for Most Played!
+        val song = songDao.getSongById(songId)
+        if (song != null) {
+            songDao.updateSong(song.copy(playCount = song.playCount + 1))
+        }
     }
 
     suspend fun scanDeviceFiles(forceDemo: Boolean = false) = withContext(Dispatchers.IO) {
@@ -104,14 +150,69 @@ class MusicRepository(
 
             // Save to Database
             if (songsList.isNotEmpty()) {
+                val settingsManager = com.example.data.local.SettingsManager(context)
+                val blacklist = settingsManager.skipFolders.first()
+                    .split(",")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+
+                val filteredSongs = if (blacklist.isNotEmpty()) {
+                    songsList.filter { song ->
+                        blacklist.none { blacklistedPath ->
+                            song.filePath.contains(blacklistedPath, ignoreCase = true)
+                        }
+                    }
+                } else {
+                    songsList
+                }
+
+                // Re-build albumsMap and artistsMap from filtered songs to keep counts accurate
+                val filteredAlbums = mutableMapOf<String, AlbumEntity>()
+                val filteredArtists = mutableMapOf<String, ArtistEntity>()
+
+                filteredSongs.forEach { song ->
+                    // Albums
+                    val albumsKey = song.album.lowercase() + "_" + song.artist.lowercase()
+                    val currentAlbum = filteredAlbums[albumsKey]
+                    if (currentAlbum == null) {
+                        filteredAlbums[albumsKey] = AlbumEntity(
+                            id = song.filePath.hashCode().toString(),
+                            albumName = song.album,
+                            artist = song.artist,
+                            albumArtUri = song.albumArtUri,
+                            songCount = 1
+                        )
+                    } else {
+                        filteredAlbums[albumsKey] = currentAlbum.copy(songCount = currentAlbum.songCount + 1)
+                    }
+
+                    // Artists
+                    val artistKey = song.artist.lowercase()
+                    val currentArtist = filteredArtists[artistKey]
+                    if (currentArtist == null) {
+                        filteredArtists[artistKey] = ArtistEntity(
+                            id = artistKey,
+                            artistName = song.artist,
+                            albumCount = 1,
+                            songCount = 1
+                        )
+                    } else {
+                        filteredArtists[artistKey] = currentArtist.copy(
+                            songCount = currentArtist.songCount + 1
+                        )
+                    }
+                }
+
                 songDao.clearAllSongs()
                 songDao.clearAllAlbums()
                 songDao.clearAllArtists()
 
-                songDao.insertSongs(songsList)
-                songDao.insertAlbums(albumsMap.values.toList())
-                songDao.insertArtists(artistsMap.values.toList())
-                Log.d("MusicRepository", "Scanned and saved ${songsList.size} songs, ${albumsMap.size} albums, ${artistsMap.size} artists.")
+                if (filteredSongs.isNotEmpty()) {
+                    songDao.insertSongs(filteredSongs)
+                    songDao.insertAlbums(filteredAlbums.values.toList())
+                    songDao.insertArtists(filteredArtists.values.toList())
+                }
+                Log.d("MusicRepository", "Scanned and saved ${filteredSongs.size} songs, ${filteredAlbums.size} albums, ${filteredArtists.size} artists.")
             }
         } catch (e: Exception) {
             Log.e("MusicRepository", "Failed to scan device files", e)
@@ -168,9 +269,29 @@ class MusicRepository(
                 val album = cursor.getString(albumColumn) ?: "Unknown Album"
                 val duration = cursor.getLong(durationColumn)
                 val filePath = cursor.getString(dataColumn) ?: ""
-                val dateAdded = cursor.getLong(dateAddedColumn)
+                val dateAddedVal = cursor.getLong(dateAddedColumn)
                 val trackNumber = cursor.getInt(trackColumn)
                 val albumId = cursor.getLong(albumIdColumn)
+
+                var finalDateAdded = dateAddedVal
+                if (finalDateAdded > 0L) {
+                    if (finalDateAdded < 10000000000L) {
+                        finalDateAdded *= 1000L
+                    }
+                }
+                if (finalDateAdded <= 0L && filePath.isNotEmpty()) {
+                    try {
+                        val file = java.io.File(filePath)
+                        if (file.exists()) {
+                            finalDateAdded = file.lastModified()
+                        }
+                    } catch (e: Exception) {
+                        // ignore and fallback
+                    }
+                }
+                if (finalDateAdded <= 0L) {
+                    finalDateAdded = System.currentTimeMillis() - songsList.size * 1000L
+                }
 
                 val albumArtUri = ContentUris.withAppendedId(
                     Uri.parse("content://media/external/audio/albumart"),
@@ -185,7 +306,7 @@ class MusicRepository(
                     duration = duration,
                     filePath = filePath,
                     albumArtUri = albumArtUri,
-                    dateAdded = dateAdded,
+                    dateAdded = finalDateAdded,
                     trackNumber = trackNumber,
                     lyricText = null
                 )

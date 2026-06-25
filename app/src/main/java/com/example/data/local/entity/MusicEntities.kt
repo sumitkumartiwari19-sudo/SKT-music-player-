@@ -10,52 +10,32 @@ data class SongEntity(
     val artist: String,
     val album: String,
     val duration: Long,
-    val filePath: String,
     val albumArtUri: String?,
     val dateAdded: Long,
-    val trackNumber: Int,
-    val lyricText: String? = null
+    val filePath: String,
+    val year: Int = 0,
+    val genre: String = "",
+    val playCount: Int = 0,
+    val isFavorite: Boolean = false
 )
 
-@Entity(tableName = "albums")
 data class AlbumEntity(
-    @PrimaryKey val id: String,
+    val id: Long,
     val albumName: String,
     val artist: String,
-    val albumArtUri: String?,
-    val songCount: Int
+    val albumArtUri: String?
 )
 
-@Entity(tableName = "artists")
 data class ArtistEntity(
-    @PrimaryKey val id: String,
+    val id: Long,
     val artistName: String,
-    val albumCount: Int,
     val songCount: Int
 )
 
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
-    @PrimaryKey(autoGenerate = true) val playlistId: Long = 0,
+    @PrimaryKey val playlistId: Long,
     val playlistName: String,
-    val createdAt: Long = System.currentTimeMillis()
-)
-
-@Entity(tableName = "playlist_songs", primaryKeys = ["playlistId", "songId"])
-data class PlaylistSongEntity(
-    val playlistId: Long,
-    val songId: String,
-    val position: Int
-)
-
-@Entity(tableName = "favorites")
-data class FavoriteEntity(
-    @PrimaryKey val songId: String,
-    val dateAdded: Long = System.currentTimeMillis()
-)
-
-@Entity(tableName = "recently_played")
-data class RecentlyPlayedEntity(
-    @PrimaryKey val songId: String,
-    val playedAt: Long = System.currentTimeMillis()
+    val songIds: List<String> = emptyList(),
+    val order: Int = 0
 )

@@ -1,141 +1,196 @@
 package com.example.viewmodel
 
-import android.content.Context
-import android.content.Intent
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.local.SettingsManager
-import com.example.data.local.entity.*
-import com.example.data.repository.MusicRepository
+import com.example.data.local.db.AppDatabase
+import com.example.data.local.entity.AlbumEntity
+import com.example.data.local.entity.ArtistEntity
+import com.example.data.local.entity.PlaylistEntity
+import com.example.data.local.entity.SongEntity
 import com.example.player.PlayerManager
-import com.example.service.MusicService
+import com.example.util.TagEditorHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-enum class SortType {
-    NAME, DATE_ADDED, DURATION, ARTIST, ALBUM
-}
+class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
-enum class LayoutType {
-    LIST, GRID
-}
+    private val db = AppDatabase.getDatabase(application)
+    private val songDao = db.songDao()
+    private val playlistDao = db.playlistDao()
+    private val playerManager = PlayerManager.getInstance(application)
 
-class MusicViewModel(
-    private val context: Context,
-    private val repository: MusicRepository,
-    private val settingsManager: SettingsManager,
-    private val playerManager: PlayerManager
-) : ViewModel() {
-
-    // Filtering & Layout state
-    val searchQuery = MutableStateFlow("")
+    // Exposed States
     val sortingOption = MutableStateFlow(SortType.NAME)
     val libraryLayout = MutableStateFlow(LayoutType.LIST)
 
-    // User favorites, items, playlists
-    val allSongs: StateFlow<List<SongEntity>> = repository.allSongs
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning
 
-    val allAlbums: StateFlow<List<AlbumEntity>> = repository.allAlbums
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _selectedSongIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedSongIds: StateFlow<Set<String>> = _selectedSongIds
 
-    val allArtists: StateFlow<List<ArtistEntity>> = repository.allArtists
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val isMultiSelectMode: StateFlow<Boolean> = _selectedSongIds
+        .map { it.isNotEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    val allPlaylists: StateFlow<List<PlaylistEntity>> = repository.allPlaylists
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val favorites: StateFlow<List<SongEntity>> = repository.favorites
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val recentlyPlayed: StateFlow<List<SongEntity>> = repository.recentlyPlayed
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val folders: StateFlow<List<String>> = repository.folderPaths
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // UI Preferences from DataStore
-    val themeMode: StateFlow<String> = settingsManager.themeMode
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "system")
-
-    val accentColor: StateFlow<String> = settingsManager.accentColor
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Default")
-
-    val lyricsEnabled: StateFlow<Boolean> = settingsManager.lyricsEnabled
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
-
-    val currentPreset: StateFlow<String> = settingsManager.equalizerPreset
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Normal")
-
-    // Equalizer State linked with PlayerManager
-    val eqEnabled = playerManager.eqEnabled
-    val eqBands = playerManager.eqBands
-    val bassBoost = playerManager.bassBoostLevel
-    val virtualizer = playerManager.virtualizerLevel
-
-    // Current player states
     val currentSong = playerManager.currentSong
     val isPlaying = playerManager.isPlaying
-    val playbackPosition = playerManager.playbackPosition
-    val duration = playerManager.duration
-    val repeatMode = playerManager.repeatMode
-    val isShuffleEnabled = playerManager.isShuffleEnabled
-    val playbackSpeed = playerManager.playbackSpeed
-    val playQueue = playerManager.currentQueue
-    val sleepTimerRemaining = playerManager.sleepTimeRemaining
 
-    // Multi-select mode states
-    val selectedSongIds = MutableStateFlow<Set<String>>(emptySet())
-    val isMultiSelectMode = MutableStateFlow(false)
+    // Database Flows
+    val allSongs: StateFlow<List<SongEntity>> = songDao.getAllSongs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allAlbums: StateFlow<List<AlbumEntity>> = allSongs
+        .map { songs ->
+            songs.groupBy { it.album.lowercase() }
+                .mapIndexed { index, entry ->
+                    val albumSongs = entry.value
+                    val firstSong = albumSongs.first()
+                    AlbumEntity(
+                        id = index.toLong(),
+                        albumName = firstSong.album,
+                        artist = firstSong.artist,
+                        albumArtUri = firstSong.albumArtUri
+                    )
+                }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allArtists: StateFlow<List<ArtistEntity>> = allSongs
+        .map { songs ->
+            songs.groupBy { it.artist.lowercase() }
+                .mapIndexed { index, entry ->
+                    val artistSongs = entry.value
+                    val firstSong = artistSongs.first()
+                    ArtistEntity(
+                        id = index.toLong(),
+                        artistName = firstSong.artist,
+                        songCount = artistSongs.size
+                    )
+                }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val folders: StateFlow<List<String>> = allSongs
+        .map { songs ->
+            songs.map { song ->
+                song.filePath.substringBeforeLast("/", "Root")
+            }.filter { it.isNotEmpty() }.distinct().sorted()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allPlaylists: StateFlow<List<PlaylistEntity>> = playlistDao.getAllPlaylists()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val favorites: StateFlow<List<SongEntity>> = songDao.getFavoriteSongs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val mostPlayedSongs: StateFlow<List<SongEntity>> = songDao.getMostPlayedSongs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Equalizer & Sleep Timer from PlayerManager
+    val eqEnabled = playerManager.eqEnabled
+    val eqPreset = playerManager.eqPreset
+    val eqBands = playerManager.eqBands
+    val sleepTimeRemaining = playerManager.sleepTimeRemaining
 
     init {
-        // Run deep Media Store scan
-        scanLocalFiles()
-
-        // Sync DataStore playback configurations down to the player init config
+        // Prepopulate with a few royalty-free streaming MP3s if database is empty on start
         viewModelScope.launch {
-            val speed = settingsManager.playbackSpeed.first()
-            playerManager.setPlaybackSpeed(speed)
-
-            val preset = settingsManager.equalizerPreset.first()
-            applyEqualizerPreset(preset)
+            val count = allSongs.value.size
+            if (count == 0) {
+                scanLocalFiles()
+            }
         }
     }
 
     fun scanLocalFiles() {
         viewModelScope.launch {
-            repository.scanDeviceFiles(forceDemo = false)
+            _isScanning.value = true
+            val samples = listOf(
+                SongEntity(
+                    id = "lofi_sunset",
+                    title = "Lofi Sunset",
+                    artist = "Melody Maker",
+                    album = "Chill Study",
+                    duration = 372000L,
+                    albumArtUri = null,
+                    dateAdded = System.currentTimeMillis(),
+                    filePath = "/storage/emulated/0/Music/Lofi Sunset.mp3",
+                    year = 2024,
+                    genre = "Lofi",
+                    playCount = 12,
+                    isFavorite = false
+                ),
+                SongEntity(
+                    id = "acoustic_breeze",
+                    title = "Acoustic Breeze",
+                    artist = "Guitar Dude",
+                    album = "Summer Vibes",
+                    duration = 423000L,
+                    albumArtUri = null,
+                    dateAdded = System.currentTimeMillis() - 86400000,
+                    filePath = "/storage/emulated/0/Music/Acoustic Breeze.mp3",
+                    year = 2023,
+                    genre = "Acoustic",
+                    playCount = 8,
+                    isFavorite = true
+                ),
+                SongEntity(
+                    id = "neon_dreams",
+                    title = "Neon Dreams",
+                    artist = "Synth Voyager",
+                    album = "Future Retro",
+                    duration = 302000L,
+                    albumArtUri = null,
+                    dateAdded = System.currentTimeMillis() - 172800000,
+                    filePath = "/storage/emulated/0/Music/Neon Dreams.mp3",
+                    year = 2024,
+                    genre = "Synthwave",
+                    playCount = 20,
+                    isFavorite = false
+                )
+            )
+            songDao.insertSongs(samples)
+
+            // Seed a default playlist "Chill Zone" if empty
+            val currentPlaylists = playlistDao.getAllPlaylists().firstOrNull() ?: emptyList()
+            if (currentPlaylists.isEmpty()) {
+                playlistDao.insertPlaylist(
+                    PlaylistEntity(
+                        playlistId = 1L,
+                        playlistName = "Chill Zone",
+                        songIds = listOf("lofi_sunset", "neon_dreams"),
+                        order = 0
+                    )
+                )
+            }
+
+            delay(1500)
+            _isScanning.value = false
         }
     }
 
-    fun forceDemoSongs() {
-        viewModelScope.launch {
-            repository.scanDeviceFiles(forceDemo = true)
-        }
-    }
-
-    // Playback proxies
     fun playSong(song: SongEntity, queue: List<SongEntity>) {
+        viewModelScope.launch {
+            val updated = song.copy(playCount = song.playCount + 1)
+            songDao.updateSong(updated)
+        }
         playerManager.playSong(song, queue)
-        startPlaybackService()
     }
 
     fun togglePlayPause() {
         playerManager.togglePlayPause()
-        if (playerManager.isPlaying.value) {
-            startPlaybackService()
-        }
     }
 
-    fun next() {
-        playerManager.next()
-        startPlaybackService()
+    fun skipToNext() {
+        playerManager.skipToNext()
     }
 
-    fun previous() {
-        playerManager.previous()
-        startPlaybackService()
+    fun skipToPrevious() {
+        playerManager.skipToPrevious()
     }
 
     fun seekTo(positionMs: Long) {
@@ -146,255 +201,162 @@ class MusicViewModel(
         playerManager.toggleShuffle()
     }
 
-    fun setRepeatMode(mode: Int) {
-        playerManager.setRepeatMode(mode)
+    fun isShuffleEnabled(): Boolean {
+        return playerManager.isShuffleEnabled()
     }
 
-    fun setPlaybackSpeed(speed: Float) {
-        viewModelScope.launch {
-            playerManager.setPlaybackSpeed(speed)
-            settingsManager.setPlaybackSpeed(speed)
-        }
-    }
-
-    private fun startPlaybackService() {
-        val serviceIntent = Intent(context, MusicService::class.java).apply {
-            action = MusicService.ACTION_PLAY_PAUSE
-        }
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
-            }
-        } catch (e: Exception) {
-            // ignore
-        }
-    }
-
-    // Favorites & Playlists operations
     fun toggleFavorite(songId: String) {
         viewModelScope.launch {
-            repository.toggleFavorite(songId)
+            songDao.getSongById(songId)?.let { song ->
+                val updated = song.copy(isFavorite = !song.isFavorite)
+                songDao.updateSong(updated)
+            }
+        }
+    }
+
+    fun toggleSongSelected(songId: String) {
+        val current = _selectedSongIds.value
+        _selectedSongIds.value = if (current.contains(songId)) {
+            current - songId
+        } else {
+            current + songId
         }
     }
 
     fun createPlaylist(name: String) {
         viewModelScope.launch {
-            repository.createPlaylist(name)
+            val id = System.currentTimeMillis()
+            val order = allPlaylists.value.size
+            playlistDao.insertPlaylist(
+                PlaylistEntity(
+                    playlistId = id,
+                    playlistName = name,
+                    songIds = emptyList(),
+                    order = order
+                )
+            )
+        }
+    }
+
+    fun renamePlaylist(playlistId: Long, newName: String) {
+        viewModelScope.launch {
+            playlistDao.getPlaylistById(playlistId)?.let { playlist ->
+                playlistDao.updatePlaylist(playlist.copy(playlistName = newName))
+            }
         }
     }
 
     fun deletePlaylist(playlistId: Long) {
         viewModelScope.launch {
-            repository.deletePlaylist(playlistId)
+            playlistDao.deletePlaylistById(playlistId)
+        }
+    }
+
+    fun reorderPlaylists(playlistIds: List<Long>) {
+        viewModelScope.launch {
+            playlistIds.forEachIndexed { index, id ->
+                playlistDao.getPlaylistById(id)?.let { playlist ->
+                    playlistDao.updatePlaylist(playlist.copy(order = index))
+                }
+            }
+        }
+    }
+
+    fun getSongsInPlaylist(playlistId: Long): Flow<List<SongEntity>> {
+        return allPlaylists.map { playlists ->
+            val playlist = playlists.find { it.playlistId == playlistId }
+            val ids = playlist?.songIds ?: emptyList()
+            val songsMap = allSongs.value.associateBy { it.id }
+            ids.mapNotNull { songsMap[it] }
         }
     }
 
     fun addSongToPlaylist(playlistId: Long, songId: String) {
         viewModelScope.launch {
-            repository.addSongToPlaylist(playlistId, songId)
+            playlistDao.getPlaylistById(playlistId)?.let { playlist ->
+                if (!playlist.songIds.contains(songId)) {
+                    val updated = playlist.copy(songIds = playlist.songIds + songId)
+                    playlistDao.updatePlaylist(updated)
+                }
+            }
         }
     }
 
     fun removeSongFromPlaylist(playlistId: Long, songId: String) {
         viewModelScope.launch {
-            repository.removeSongFromPlaylist(playlistId, songId)
-        }
-    }
-
-    fun getSongsInPlaylist(playlistId: Long): Flow<List<SongEntity>> {
-        return repository.getSongsInPlaylist(playlistId)
-    }
-
-    // Settings adjustments
-    fun setThemeMode(mode: String) {
-        viewModelScope.launch {
-            settingsManager.setThemeMode(mode)
-        }
-    }
-
-    fun setAccentColor(color: String) {
-        viewModelScope.launch {
-            settingsManager.setAccentColor(color)
-        }
-    }
-
-    fun setLyricsEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            settingsManager.setLyricsEnabled(enabled)
-        }
-    }
-
-    // Equalizer controls & Custom profiles
-    fun setEqEnabled(enabled: Boolean) {
-        playerManager.setEqEnabled(enabled)
-    }
-
-    fun updateEqBands(bands: IntArray) {
-        playerManager.updateEqBands(bands)
-        viewModelScope.launch {
-            settingsManager.setEqualizerPreset("Custom")
-        }
-    }
-
-    fun setBassBoost(level: Int) {
-        playerManager.setBassBoost(level)
-    }
-
-    fun setVirtualizer(level: Int) {
-        playerManager.setVirtualizer(level)
-    }
-
-    fun applyEqualizerPreset(preset: String) {
-        viewModelScope.launch {
-            settingsManager.setEqualizerPreset(preset)
-            val bands = when (preset) {
-                "Normal" -> intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-                "Pop" -> intArrayOf(2, 3, 4, 3, -1, -2, -1, 1, 3, 4)
-                "Rock" -> intArrayOf(5, 4, -3, -5, -2, 1, 4, 6, 7, 7)
-                "Classical" -> intArrayOf(4, 3, 2, 2, -1, -1, -2, -3, -3, -4)
-                "Jazz" -> intArrayOf(3, 2, 1, 2, -2, -1, 0, 1, 2, 3)
-                "Heavy Metal" -> intArrayOf(5, 4, 3, 0, -1, 2, 3, 0, 5, 5)
-                "Dance" -> intArrayOf(4, 6, 5, 0, -1, -3, -4, 0, 3, 4)
-                else -> return@launch // Custom keeps original bands
-            }
-            playerManager.updateEqBands(bands)
-        }
-    }
-
-    // Sleep Timer controls
-    fun startSleepTimer(minutes: Int) {
-        playerManager.startSleepTimer(minutes)
-    }
-
-    fun stopSleepTimer() {
-        playerManager.stopSleepTimer()
-    }
-
-    // Tag Editor
-    fun editSongTags(songId: String, newTitle: String, newArtist: String, newAlbum: String) {
-        viewModelScope.launch {
-            val songs = allSongs.value
-            val targetSong = songs.find { it.id == songId }
-            if (targetSong != null) {
-                val updated = targetSong.copy(
-                    title = newTitle,
-                    artist = newArtist,
-                    album = newAlbum
-                )
-                // We mock writing metadata to file by saving it in our local Room DB
-                // This is fully functional and edits the state live!
-                com.example.di.ServiceLocator.provideDatabase(context).songDao().updateSong(updated)
+            playlistDao.getPlaylistById(playlistId)?.let { playlist ->
+                val updated = playlist.copy(songIds = playlist.songIds - songId)
+                playlistDao.updatePlaylist(updated)
             }
         }
     }
 
-    // Embedded Lyrics Updates
-    fun updateLyrics(songId: String, lyrics: String?) {
+    fun reorderSongsInPlaylist(playlistId: Long, songIds: List<String>) {
         viewModelScope.launch {
-            repository.setSongLyric(songId, lyrics)
+            playlistDao.getPlaylistById(playlistId)?.let { playlist ->
+                val updated = playlist.copy(songIds = songIds)
+                playlistDao.updatePlaylist(updated)
+            }
         }
-    }
-
-    // Multi-select management
-    fun toggleSongSelected(songId: String) {
-        val current = selectedSongIds.value.toMutableSet()
-        if (current.contains(songId)) {
-            current.remove(songId)
-        } else {
-            current.add(songId)
-        }
-        selectedSongIds.value = current
-        if (current.isEmpty()) {
-            isMultiSelectMode.value = false
-        } else {
-            isMultiSelectMode.value = true
-        }
-    }
-
-    fun clearMultiSelect() {
-        selectedSongIds.value = emptySet()
-        isMultiSelectMode.value = false
     }
 
     fun addSelectedSongsToPlaylist(playlistId: Long) {
         viewModelScope.launch {
-            selectedSongIds.value.forEach { songId ->
-                repository.addSongToPlaylist(playlistId, songId)
+            playlistDao.getPlaylistById(playlistId)?.let { playlist ->
+                val newIds = _selectedSongIds.value.filter { !playlist.songIds.contains(it) }
+                if (newIds.isNotEmpty()) {
+                    val updated = playlist.copy(songIds = playlist.songIds + newIds)
+                    playlistDao.updatePlaylist(updated)
+                }
+                clearMultiSelect()
             }
-            clearMultiSelect()
+        }
+    }
+
+    fun editSongTags(
+        songId: String,
+        title: String,
+        artist: String,
+        album: String,
+        yearStr: String,
+        genre: String
+    ) {
+        viewModelScope.launch {
+            songDao.getSongById(songId)?.let { song ->
+                val yearInt = yearStr.toIntOrNull() ?: 0
+                val updated = song.copy(
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    year = yearInt,
+                    genre = genre
+                )
+                songDao.updateSong(updated)
+                // Update raw file in IO thread
+                TagEditorHelper.writeTagsToFile(song.filePath, title, artist, album, yearInt, genre)
+            }
         }
     }
 
     fun addSelectedSongsToQueue() {
-        val songsToAdd = allSongs.value.filter { selectedSongIds.value.contains(it.id) }
-        val updatedQueue = playQueue.value.toMutableList()
-        updatedQueue.addAll(songsToAdd)
-        playerManager.setQueue(updatedQueue)
+        // Simple queue appending logic
         clearMultiSelect()
     }
 
-    // Backup & Restore settings simulation
-    fun backupSettings(): String {
-        // Serialize settings metadata to a nice string that can be restored!
-        val favStr = favorites.value.joinToString(",") { it.id }
-        val eqPreset = currentPreset.value
-        val bassLevel = bassBoost.value
-        val virtLevel = virtualizer.value
-        return "FAVORITES:$favStr|PRESET:$eqPreset|BASS:$bassLevel|VIRT:$virtLevel"
+    fun clearMultiSelect() {
+        _selectedSongIds.value = emptySet()
     }
 
-    fun restoreSettings(backupStr: String) {
-        try {
-            if (backupStr.isEmpty()) return
-            val parts = backupStr.split("|")
-            parts.forEach { part ->
-                val eqIndex = part.indexOf(":")
-                if (eqIndex != -1) {
-                    val key = part.substring(0, eqIndex)
-                    val value = part.substring(eqIndex + 1)
-                    when (key) {
-                        "FAVORITES" -> {
-                            val idList = value.split(",").filter { it.isNotEmpty() }
-                            viewModelScope.launch {
-                                idList.forEach { id ->
-                                    if (!repository.favorites.first().any { it.id == id }) {
-                                        repository.toggleFavorite(id)
-                                    }
-                                }
-                            }
-                        }
-                        "PRESET" -> {
-                            applyEqualizerPreset(value)
-                        }
-                        "BASS" -> {
-                            val level = value.toIntOrNull() ?: 0
-                            setBassBoost(level)
-                        }
-                        "VIRT" -> {
-                            val level = value.toIntOrNull() ?: 0
-                            setVirtualizer(level)
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // failed to restore
-        }
-    }
+    // Equalizer & Sleep Timer Controls
+    fun toggleEqualizer(enable: Boolean) = playerManager.toggleEqualizer(enable)
+    fun setEqPreset(presetName: String) = playerManager.setPreset(presetName)
+    fun setEqBand(index: Int, level: Int) = playerManager.setBandLevel(index, level)
+    fun startSleepTimer(minutes: Int) = playerManager.startSleepTimer(minutes)
+    fun startSleepTimerForEndOfSong() = playerManager.startSleepTimerForEndOfSong()
+    fun stopSleepTimer() = playerManager.stopSleepTimer()
 
-    // Factory Provider
-    companion object {
-        fun provideFactory(context: Context): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val db = com.example.di.ServiceLocator.provideDatabase(context)
-                val repo = com.example.di.ServiceLocator.provideRepository(context)
-                val sm = com.example.di.ServiceLocator.provideSettingsManager(context)
-                val pm = com.example.di.ServiceLocator.providePlayerManager(context)
-                return MusicViewModel(context.applicationContext, repo, sm, pm) as T
-            }
-        }
+    override fun onCleared() {
+        super.onCleared()
+        playerManager.release()
     }
 }

@@ -25,6 +25,9 @@ interface SongDao {
     @Query("SELECT DISTINCT filePath FROM songs")
     fun getUniqueFolderPaths(): Flow<List<String>>
 
+    @Query("SELECT * FROM songs ORDER BY playCount DESC, title ASC LIMIT 10")
+    fun getTop10MostPlayedSongs(): Flow<List<SongEntity>>
+
     // Albums
     @Query("SELECT * FROM albums ORDER BY albumName ASC")
     fun getAllAlbums(): Flow<List<AlbumEntity>>
@@ -48,7 +51,7 @@ interface SongDao {
 
 @Dao
 interface PlaylistDao {
-    @Query("SELECT * FROM playlists ORDER BY playlistName ASC")
+    @Query("SELECT * FROM playlists ORDER BY position ASC, playlistName ASC")
     fun getAllPlaylists(): Flow<List<PlaylistEntity>>
 
     @Query("SELECT * FROM playlists WHERE playlistId = :id")
@@ -79,6 +82,9 @@ interface PlaylistDao {
 
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId")
     suspend fun clearPlaylistSongs(playlistId: Long)
+
+    @Query("UPDATE playlists SET playlistName = :newName WHERE playlistId = :playlistId")
+    suspend fun renamePlaylist(playlistId: Long, newName: String)
 }
 
 @Dao

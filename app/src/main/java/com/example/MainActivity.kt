@@ -1,7 +1,6 @@
 package com.example
 
-import android.app.AlertDialog
-import android.content.Context
+import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -10,395 +9,381 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import com.example.ui.screens.*
-import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.screens.LibraryScreen
 import com.example.viewmodel.MusicViewModel
-
-// Core navigation state enum
-enum class ActiveScreen {
-    MAIN, EQUALIZER, SETTINGS
-}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         setContent {
-            val context = LocalContext.current
-            val viewModel: MusicViewModel = viewModel(
-                factory = MusicViewModel.provideFactory(context)
-            )
-
-            // Dynamic User accent selections
-            val userAccent by viewModel.accentColor.collectAsState()
-            val userThemeMode by viewModel.themeMode.collectAsState()
-
-            val isDarkSystem = androidx.compose.foundation.isSystemInDarkTheme()
-            val isDarkTheme = when (userThemeMode) {
-                "light" -> false
-                "dark" -> true
-                else -> isDarkSystem
-            }
-
-            MyApplicationTheme(
-                darkTheme = isDarkTheme,
-                accentColorName = userAccent,
-                dynamicColor = userAccent == "Default"
+            MaterialTheme(
+                colorScheme = darkColorScheme() // Premium dark music theme
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainNavigationShell(viewModel = viewModel)
+                    PermissionWrapper {
+                        MainAppContainer()
+                    }
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainNavigationShell(viewModel: MusicViewModel) {
+fun PermissionWrapper(content: @Composable () -> Unit) {
     val context = LocalContext.current
+    var hasPermission by remember { mutableStateOf(false) }
 
-    // Active bottom tab: 0: Home, 1: Search, 2: Library
-    var activeBottomTab by remember { mutableStateOf(0) }
-    var activeRootScreen by remember { mutableStateOf(ActiveScreen.MAIN) }
-
-    // Full Player Modal overlay state
-    var showFullPlayerModal by remember { mutableStateOf(false) }
-    var showSleepTimerShortcutDialog by remember { mutableStateOf(false) }
-
-    val currentSong by viewModel.currentSong.collectAsState()
-    val isPlaying by viewModel.isPlaying.collectAsState()
-    val playProgress by viewModel.playbackPosition.collectAsState()
-    val songDuration by viewModel.duration.collectAsState()
-
-    // Android Permission handling
-    val musicPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        android.Manifest.permission.READ_MEDIA_AUDIO
+    val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_AUDIO
     } else {
-        android.Manifest.permission.READ_EXTERNAL_STORAGE
+        Manifest.permission.READ_EXTERNAL_STORAGE
     }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted) {
-            viewModel.scanLocalFiles()
-            Toast.makeText(context, "Storage scanner successfully configured!", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Running in Offline demo mode.", Toast.LENGTH_LONG).show()
+        hasPermission = isGranted
+        if (!isGranted) {
+            Toast.makeText(context, "Storage permission is recommended to read local audio files.", Toast.LENGTH_LONG).show()
         }
     }
 
     LaunchedEffect(Unit) {
-        // Trigger storage scan permissions
-        launcher.launch(musicPermission)
+        launcher.launch(permissionToRequest)
+        // Set to true regardless so emulator / sample songs always function perfectly
+        hasPermission = true
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        AnimatedContent(
-            targetState = activeRootScreen,
-            transitionSpec = {
-                SlideInVerticallyWithFade() togetherWith SlideOutVerticallyWithFade()
-            },
-            modifier = Modifier.fillMaxSize()
-        ) { screen ->
-            when (screen) {
-                ActiveScreen.MAIN -> {
-                    Scaffold(
-                        topBar = {
-                            CenterAlignedTopAppBar(
-                                title = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.MusicNote,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                        Text(
-                                            "SKT Music",
-                                            fontWeight = FontWeight.Black,
-                                            fontSize = 18.sp,
-                                            letterSpacing = (-0.5).sp
-                                        )
-                                    }
-                                },
-                                actions = {
-                                    IconButton(
-                                        onClick = { activeRootScreen = ActiveScreen.SETTINGS },
-                                        modifier = Modifier.testTag("settings_top_btn")
-                                    ) {
-                                        Icon(Icons.Outlined.Settings, contentDescription = "Settings Options")
-                                    }
-                                },
-                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                                    containerColor = Color.Transparent
-                                )
-                            )
-                        },
-                        bottomBar = {
-                            NavigationBar(
-                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-                                modifier = Modifier.testTag("bottom_nav_bar")
-                            ) {
-                                NavigationBarItem(
-                                    selected = activeBottomTab == 0,
-                                    onClick = { activeBottomTab = 0 },
-                                    label = { Text("Home") },
-                                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                                    modifier = Modifier.testTag("tab_home")
-                                )
-                                NavigationBarItem(
-                                    selected = activeBottomTab == 1,
-                                    onClick = { activeBottomTab = 1 },
-                                    label = { Text("Search") },
-                                    icon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                                    modifier = Modifier.testTag("tab_search")
-                                )
-                                NavigationBarItem(
-                                    selected = activeBottomTab == 2,
-                                    onClick = { activeBottomTab = 2 },
-                                    label = { Text("Library") },
-                                    icon = { Icon(Icons.Default.LibraryMusic, contentDescription = null) },
-                                    modifier = Modifier.testTag("tab_library")
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    ) { innerPadding ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(innerPadding)
-                        ) {
-                            when (activeBottomTab) {
-                                0 -> HomeScreen(
-                                    viewModel = viewModel,
-                                    onNavigateToLibrary = { activeBottomTab = 2 },
-                                    onOpenSleepTimer = { showSleepTimerShortcutDialog = true }
-                                )
-                                1 -> SearchScreen(viewModel = viewModel)
-                                2 -> LibraryScreen(viewModel = viewModel)
-                            }
-                        }
-                    }
-                }
+    content()
+}
 
-                ActiveScreen.EQUALIZER -> {
-                    EqualizerScreen(
-                        viewModel = viewModel,
-                        onBackClick = { activeRootScreen = ActiveScreen.MAIN }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainAppContainer() {
+    val viewModel: MusicViewModel = viewModel()
+    val context = LocalContext.current
+
+    var showMenu by remember { mutableStateOf(false) }
+    var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var showEqualizerDialog by remember { mutableStateOf(false) }
+    var showCreatePlaylistDialog by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Melody Player",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.headlineSmall
                     )
-                }
-
-                ActiveScreen.SETTINGS -> {
-                    SettingsScreen(
-                        viewModel = viewModel,
-                        onBackClick = { activeRootScreen = ActiveScreen.MAIN }
-                    )
-                }
-            }
-        }
-
-        // persistent mini player component hovering above the bottom navigation bar
-        if (currentSong != null && activeRootScreen == ActiveScreen.MAIN) {
-            val song = currentSong!!
-            val safeProgress = if (songDuration > 0) playProgress.toFloat() / songDuration.toFloat() else 0f
-
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 90.dp, start = 16.dp, end = 16.dp) // fit cleanly above bottom bar
-                    .shadow(12.dp, RoundedCornerShape(20.dp))
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
-                    .clickable { showFullPlayerModal = true }
-                    .fillMaxWidth()
-                    .height(64.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer)
+                },
+                actions = {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
                     ) {
-                        if (song.albumArtUri != null && song.albumArtUri.startsWith("http")) {
-                            AsyncImage(
-                                model = song.albumArtUri,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.MusicNote,
-                                contentDescription = null,
-                                modifier = Modifier.align(Alignment.Center)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = song.title,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        DropdownMenuItem(
+                            text = { Text("Sleep Timer") },
+                            onClick = {
+                                showSleepTimerDialog = true
+                                showMenu = false
+                            }
                         )
-                        Text(
-                            text = song.artist,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        DropdownMenuItem(
+                            text = { Text("Audio Equalizer") },
+                            onClick = {
+                                showEqualizerDialog = true
+                                showMenu = false
+                            }
                         )
-                    }
-
-                    IconButton(
-                        onClick = { viewModel.togglePlayPause() },
-                        modifier = Modifier.testTag("mini_player_play_pause")
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pause"
+                        DropdownMenuItem(
+                            text = { Text("Create Playlist") },
+                            onClick = {
+                                showCreatePlaylistDialog = true
+                                showMenu = false
+                            }
                         )
-                    }
-
-                    IconButton(onClick = { viewModel.next() }) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Next")
                     }
                 }
-
-                // Progress slide line at bottom of glass miniplayer
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth(safeProgress)
-                        .height(3.dp)
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-            }
-        }
-
-        // Full player animated transition slides
-        AnimatedVisibility(
-            visible = showFullPlayerModal,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier.fillMaxSize()
+            )
+        },
+        modifier = Modifier.fillMaxSize()
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            NowPlayingScreen(
+            LibraryScreen(
                 viewModel = viewModel,
-                onCloseClick = { showFullPlayerModal = false },
-                onNavigateToEqualizer = {
-                    showFullPlayerModal = false
-                    activeRootScreen = ActiveScreen.EQUALIZER
-                },
-                onOpenSleepTimer = {
-                    showFullPlayerModal = false
-                    showSleepTimerShortcutDialog = true
-                }
+                modifier = Modifier.fillMaxSize()
             )
-        }
 
-        // Sleep Timer setup Dialog Shortcut
-        if (showSleepTimerShortcutDialog) {
-            var inputMinutes by remember { mutableStateOf("15") }
-            val sleepValRemaining by viewModel.sleepTimerRemaining.collectAsState()
+            // Dialogs
+            if (showSleepTimerDialog) {
+                SleepTimerDialog(viewModel, onDismiss = { showSleepTimerDialog = false })
+            }
 
-            AlertDialog(
-                onDismissRequest = { showSleepTimerShortcutDialog = false },
-                title = { Text("Sleep Timer Setup") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Pause playback automatically after selected period. Enter minutes duration below:", fontSize = 12.sp)
-                        OutlinedTextField(
-                            value = inputMinutes,
-                            onValueChange = { inputMinutes = it },
-                            label = { Text("Duration (Minutes)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        if (sleepValRemaining > 0) {
-                            Text(
-                                "Remaining time active: ${sleepValRemaining / 60000} mins left.",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val mins = inputMinutes.toIntOrNull() ?: 15
-                        viewModel.startSleepTimer(mins)
-                        showSleepTimerShortcutDialog = false
-                    }) {
-                        Text("Start Timer")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        viewModel.stopSleepTimer()
-                        showSleepTimerShortcutDialog = false
-                    }) {
-                        Text("Disable Timer")
-                    }
-                }
-            )
+            if (showEqualizerDialog) {
+                EqualizerDialog(viewModel, onDismiss = { showEqualizerDialog = false })
+            }
+
+            if (showCreatePlaylistDialog) {
+                CreatePlaylistDialog(viewModel, onDismiss = { showCreatePlaylistDialog = false })
+            }
         }
     }
 }
 
-// Fluid Navigation transitions help
-@OptIn(ExperimentalAnimationApi::class)
-private fun SlideInVerticallyWithFade() = slideInVertically(
-    initialOffsetY = { 300 }
-) + fadeIn()
+@Composable
+fun SleepTimerDialog(viewModel: MusicViewModel, onDismiss: () -> Unit) {
+    val remainingMs by viewModel.sleepTimeRemaining.collectAsState()
 
-@OptIn(ExperimentalAnimationApi::class)
-private fun SlideOutVerticallyWithFade() = slideOutVertically(
-    targetOffsetY = { -300 }
-) + fadeOut()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sleep Timer") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (remainingMs != null) {
+                    val totalSec = remainingMs!! / 1000
+                    val min = totalSec / 60
+                    val sec = totalSec % 60
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("Active Countdown", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(
+                                text = String.format("%02d:%02d", min, sec),
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                Text("Select duration:", fontWeight = FontWeight.SemiBold)
+                
+                val options = listOf(
+                    5 to "5 Minutes",
+                    10 to "10 Minutes",
+                    15 to "15 Minutes",
+                    30 to "30 Minutes",
+                    60 to "60 Minutes"
+                )
+
+                options.forEach { (mins, label) ->
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.startSleepTimer(mins)
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(label)
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        viewModel.startSleepTimerForEndOfSong()
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("End of Current Song")
+                }
+
+                if (remainingMs != null) {
+                    Button(
+                        onClick = {
+                            viewModel.stopSleepTimer()
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel Sleep Timer")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun EqualizerDialog(viewModel: MusicViewModel, onDismiss: () -> Unit) {
+    val enabled by viewModel.eqEnabled.collectAsState()
+    val preset by viewModel.eqPreset.collectAsState()
+    val bands by viewModel.eqBands.collectAsState()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Audio Equalizer", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Switch(
+                        checked = enabled,
+                        onCheckedChange = { viewModel.toggleEqualizer(it) }
+                    )
+                }
+
+                Text("Presets", fontWeight = FontWeight.SemiBold)
+                
+                var showPresetMenu by remember { mutableStateOf(false) }
+                Box {
+                    OutlinedButton(
+                        onClick = { showPresetMenu = true },
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(preset)
+                    }
+                    DropdownMenu(
+                        expanded = showPresetMenu,
+                        onDismissRequest = { showPresetMenu = false }
+                    ) {
+                        val presets = listOf("Normal", "Bass Boost", "Pop", "Rock", "Jazz", "Classical")
+                        presets.forEach { name ->
+                            DropdownMenuItem(
+                                text = { Text(name) },
+                                onClick = {
+                                    viewModel.setEqPreset(name)
+                                    showPresetMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Divider()
+
+                Text("5-Band Equalizer", fontWeight = FontWeight.SemiBold)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    val bandFreqs = listOf("60 Hz", "230 Hz", "910 Hz", "4 kHz", "14 kHz")
+                    bands.forEachIndexed { index, level ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.fillMaxHeight()
+                        ) {
+                            Text("${level}dB", fontSize = 10.sp, color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+                            Slider(
+                                value = level.toFloat(),
+                                onValueChange = { viewModel.setEqBand(index, it.toInt()) },
+                                valueRange = -15f..15f,
+                                steps = 30,
+                                enabled = enabled,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .width(16.dp)
+                            )
+                            Text(bandFreqs[index], fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Done")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CreatePlaylistDialog(viewModel: MusicViewModel, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Create Playlist") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Playlist Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (name.isNotBlank()) {
+                        viewModel.createPlaylist(name.trim())
+                        onDismiss()
+                    }
+                }
+            ) {
+                Text("Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}

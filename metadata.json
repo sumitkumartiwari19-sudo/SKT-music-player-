@@ -1,6 +1,8 @@
 {
-  "name": "SKT Music Player",
-  "description": "An elegant, premium, offline-first music player inspired by Pixel Player with modern Material 3 UI.",
+  "name": "Music Player",
+  "description": "A feature-rich, beautiful local music player with a custom tag editor, playlists, favorites, and widgets.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

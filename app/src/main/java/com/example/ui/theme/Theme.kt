@@ -46,6 +46,7 @@ fun MyApplicationTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     accentColorName: String = "Default",
     dynamicColor: Boolean = true,
+    fontName: String = "Default",
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -69,9 +70,29 @@ fun MyApplicationTheme(
         }
     }
 
+    val selectedFont = when (fontName) {
+        "Monospace" -> androidx.compose.ui.text.font.FontFamily.Monospace
+        "Serif" -> androidx.compose.ui.text.font.FontFamily.Serif
+        "Cursive" -> androidx.compose.ui.text.font.FontFamily.Cursive
+        "Sans-Serif" -> androidx.compose.ui.text.font.FontFamily.SansSerif
+        else -> androidx.compose.ui.text.font.FontFamily.Default
+    }
+
+    val customTypography = Typography(
+        bodyLarge = Typography.bodyLarge.copy(fontFamily = selectedFont),
+        bodyMedium = Typography.bodyMedium.copy(fontFamily = selectedFont),
+        bodySmall = Typography.bodySmall.copy(fontFamily = selectedFont),
+        titleLarge = Typography.titleLarge.copy(fontFamily = selectedFont),
+        titleMedium = Typography.titleMedium.copy(fontFamily = selectedFont),
+        titleSmall = Typography.titleSmall.copy(fontFamily = selectedFont),
+        labelLarge = Typography.labelLarge.copy(fontFamily = selectedFont),
+        labelMedium = Typography.labelMedium.copy(fontFamily = selectedFont),
+        labelSmall = Typography.labelSmall.copy(fontFamily = selectedFont)
+    )
+
     MaterialTheme(
         colorScheme = finalScheme,
-        typography = Typography,
+        typography = customTypography,
         content = content
     )
 }

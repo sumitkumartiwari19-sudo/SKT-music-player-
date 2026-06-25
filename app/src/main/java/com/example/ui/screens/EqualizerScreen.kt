@@ -169,7 +169,7 @@ fun EqualizerScreen(
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.width(36.dp)
+                                    modifier = Modifier.width(56.dp)
                                 ) {
                                     Text(
                                         text = "${if (gainVal > 0) "+" else ""}$gainVal",
@@ -180,7 +180,8 @@ fun EqualizerScreen(
 
                                     Box(
                                         modifier = Modifier
-                                            .height(160.dp)
+                                            .height(240.dp)
+                                            .width(56.dp)
                                             .padding(vertical = 8.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -194,7 +195,7 @@ fun EqualizerScreen(
                                             },
                                             valueRange = -15f..15f,
                                             modifier = Modifier
-                                                .size(160.dp, 36.dp)
+                                                .size(240.dp, 56.dp)
                                                 .graphicsLayer {
                                                     rotationZ = -90f // Rotate to vertical!
                                                 }

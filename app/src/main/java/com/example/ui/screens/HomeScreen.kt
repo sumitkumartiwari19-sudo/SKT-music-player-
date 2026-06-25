@@ -1,11 +1,16 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Timer
@@ -27,11 +32,13 @@ import coil.compose.AsyncImage
 import com.example.data.local.entity.SongEntity
 import com.example.viewmodel.MusicViewModel
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: MusicViewModel,
-    onNavigateToLibrary: () -> Unit,
+    onNavigateToLibrary: (Long?) -> Unit,
     onOpenSleepTimer: () -> Unit,
+    onNavigateToSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val songs by viewModel.allSongs.collectAsState()
@@ -41,13 +48,27 @@ fun HomeScreen(
 
     val context = LocalContext.current
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 120.dp) // spacing for miniplayer + nav
+    var isVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(animationSpec = tween(600)) + slideInVertically(
+            initialOffsetY = { 50 },
+            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessLow)
+        ),
+        modifier = modifier.fillMaxSize()
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 180.dp) // spacing for miniplayer + nav
+        ) {
         // Hero Visual Banner
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -62,6 +83,7 @@ fun HomeScreen(
                 )
                 .padding(24.dp)
         ) {
+
             Column(modifier = Modifier.align(Alignment.BottomStart)) {
                 Text(
                     text = "Welcome to SKT Music",
@@ -182,6 +204,56 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Stylized Search Card Widget (Middle of Home Screen)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onDoubleClick = {
+                            viewModel.focusSearchKeyboard.value = true
+                            onNavigateToSearch()
+                        },
+                        onLongClick = {
+                            viewModel.focusSearchKeyboard.value = true
+                            onNavigateToSearch()
+                        },
+                        onClick = {
+                            onNavigateToSearch()
+                        }
+                    )
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Search songs, playlists, artist...",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Recently Played
         if (recentlyPlayed.isNotEmpty()) {
             Text(
@@ -219,7 +291,7 @@ fun HomeScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
                 )
-                TextButton(onClick = onNavigateToLibrary) {
+                TextButton(onClick = { onNavigateToLibrary(null) }) {
                     Text("See all")
                 }
             }
@@ -298,7 +370,7 @@ fun HomeScreen(
             ) {
                 items(playlists, key = { it.playlistId }) { playlist ->
                     Card(
-                        onClick = onNavigateToLibrary, // detail is loaded in Library
+                        onClick = { onNavigateToLibrary(playlist.playlistId) }, // detail is loaded in Library
                         modifier = Modifier
                             .width(140.dp)
                             .height(130.dp),
@@ -381,6 +453,7 @@ fun HomeScreen(
         }
     }
 }
+}
 
 @Composable
 fun HorizontalSongCard(
@@ -404,9 +477,16 @@ fun HorizontalSongCard(
                     .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                if (song.albumArtUri != null && song.albumArtUri.startsWith("http")) {
+                if (!song.albumArtUri.isNullOrEmpty()) {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val imageRequest = remember(song.albumArtUri) {
+                        coil.request.ImageRequest.Builder(context)
+                            .data(song.albumArtUri)
+                            .crossfade(true)
+                            .build()
+                    }
                     AsyncImage(
-                        model = song.albumArtUri,
+                        model = imageRequest,
                         contentDescription = "Cover Art",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop

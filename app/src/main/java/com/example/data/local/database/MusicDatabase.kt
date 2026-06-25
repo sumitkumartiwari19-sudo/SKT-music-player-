@@ -17,7 +17,7 @@ import com.example.data.local.entity.*
         FavoriteEntity::class,
         RecentlyPlayedEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MusicDatabase : RoomDatabase() {

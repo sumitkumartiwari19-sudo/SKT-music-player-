@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.local.entity.SongEntity
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import com.example.viewmodel.MusicViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,6 +38,7 @@ fun SearchScreen(
     modifier: Modifier = Modifier
 ) {
     val query by viewModel.searchQuery.collectAsState()
+    val focusSearchKeyboard by viewModel.focusSearchKeyboard.collectAsState()
     val songs by viewModel.allSongs.collectAsState()
     val albums by viewModel.allAlbums.collectAsState()
     val artists by viewModel.allArtists.collectAsState()
@@ -72,11 +79,33 @@ fun SearchScreen(
     var selectedFilterTab by remember { mutableStateOf(0) } // 0: All, 1: Songs, 2: Albums, 3: Artists
     val tabs = listOf("All", "Songs", "Albums", "Artists")
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
+    var isVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(animationSpec = tween(600)) + slideInVertically(
+            initialOffsetY = { 50 },
+            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessLow)
+        ),
+        modifier = modifier.fillMaxSize()
     ) {
+        val focusRequester = remember { FocusRequester() }
+
+        LaunchedEffect(focusSearchKeyboard) {
+            if (focusSearchKeyboard) {
+                focusRequester.requestFocus()
+                viewModel.focusSearchKeyboard.value = false
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
         // Search Header
         Text(
             text = "Search",
@@ -110,6 +139,7 @@ fun SearchScreen(
             ),
             modifier = Modifier
                 .fillMaxWidth()
+                .focusRequester(focusRequester)
                 .testTag("search_field")
         )
 
@@ -147,9 +177,8 @@ fun SearchScreen(
 
             // Search Results lazy list
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 100.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 180.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // RENDER ARTISTS
@@ -217,9 +246,16 @@ fun SearchScreen(
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(MaterialTheme.colorScheme.secondaryContainer)
                                 ) {
-                                    if (album.albumArtUri != null && album.albumArtUri.startsWith("http")) {
+                                    if (!album.albumArtUri.isNullOrEmpty()) {
+                                        val context = androidx.compose.ui.platform.LocalContext.current
+                                        val imageRequest = remember(album.albumArtUri) {
+                                            coil.request.ImageRequest.Builder(context)
+                                                .data(album.albumArtUri)
+                                                .crossfade(true)
+                                                .build()
+                                        }
                                         AsyncImage(
-                                            model = album.albumArtUri,
+                                            model = imageRequest,
                                             contentDescription = null,
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
@@ -318,6 +354,7 @@ fun SearchScreen(
         }
     }
 }
+}
 
 @Composable
 fun SearchSongRow(
@@ -341,9 +378,16 @@ fun SearchSongRow(
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                if (song.albumArtUri != null && song.albumArtUri.startsWith("http")) {
+                if (!song.albumArtUri.isNullOrEmpty()) {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val imageRequest = remember(song.albumArtUri) {
+                        coil.request.ImageRequest.Builder(context)
+                            .data(song.albumArtUri)
+                            .crossfade(true)
+                            .build()
+                    }
                     AsyncImage(
-                        model = song.albumArtUri,
+                        model = imageRequest,
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
